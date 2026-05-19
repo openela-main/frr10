@@ -7,8 +7,8 @@
 %bcond_without selinux
 
 Name: frr10
-Version: 10.4.1
-Release: 3%{?checkout}%{?dist}
+Version: 10.4.3
+Release: 1%{?checkout}%{?dist}
 Summary: Routing daemon
 License: GPLv2+
 URL: http://www.frrouting.org
@@ -31,7 +31,7 @@ BuildRequires:  groff
 BuildRequires:  json-c-devel
 BuildRequires:  libcap-devel
 BuildRequires:  libtool
-BuildRequires:  libyang-devel >= 2.0.0
+BuildRequires:  libyang-devel >= 2.1.148
 BuildRequires:  make
 BuildRequires:  ncurses
 BuildRequires:  ncurses-devel
@@ -51,6 +51,7 @@ BuildRequires:  protobuf-c-devel
 
 Requires: net-snmp
 Requires: ncurses
+Requires: libyang >= 2.1.148
 Requires(post): systemd
 Requires(post): /sbin/install-info
 Requires(post): hostname
@@ -146,8 +147,7 @@ bzip2 -9 selinux/%{build_name}.pp
 
 %install
 mkdir -p %{buildroot}/etc/{frr,rc.d/init.d,sysconfig,logrotate.d,pam.d,default} \
-         %{buildroot}/var/log/frr %{buildroot}%{_infodir} \
-         %{buildroot}%{_unitdir}
+         %{buildroot}%{_infodir} %{buildroot}%{_unitdir}
 
 mkdir -p -m 0755 %{buildroot}%{_libdir}/frr
 mkdir -p %{buildroot}%{_tmpfilesdir}
@@ -254,7 +254,6 @@ make check PYTHON=%{__python3}
 %license COPYING
 %doc doc/mpls
 %dir %attr(750,frr,frr) %{_sysconfdir}/frr
-%dir %attr(755,frr,frr) /var/log/frr
 %dir %attr(755,frr,frr) /run/frr
 %{_infodir}/*info*
 %{_mandir}/man*/*
@@ -282,6 +281,15 @@ make check PYTHON=%{__python3}
 %endif
 
 %changelog
+* Thu Apr 09 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-1
+- Resolves: RHEL-157859 - Bump FRR to 10.4.3 to fix EVPN problems
+
+* Wed Apr 08 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.1-5
+- Resolves: RHEL-155911 - Files under /var are not properly created in image-mode
+
+* Wed Apr 08 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.1-4
+- Resolves: RHEL-158428 - fix Requires for libyang to pull in rebased version
+
 * Fri Feb 06 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.1-3
 - Resolves: RHEL-147189 - AVC failures when running frr10
 
