@@ -8,7 +8,7 @@
 
 Name: frr10
 Version: 10.4.3
-Release: 1%{?checkout}%{?dist}
+Release: 3%{?checkout}%{?dist}
 Summary: Routing daemon
 License: GPLv2+
 URL: http://www.frrouting.org
@@ -73,6 +73,10 @@ Patch0003: 0003-disable-eigrp-crypto.patch
 Patch0004: 0004-fips-mode.patch
 # Turn off one fuzz test that fails with the new glibc
 Patch0014: 0014-isisd-fuzz-test.patch
+# https://github.com/FRRouting/frr/commit/0e6882bc
+Patch0015: 0015-fix-CVE-2026-37457.patch
+# https://github.com/FRRouting/frr/commit/693a2e02
+Patch0016: 0016-fix-CVE-2026-37459.patch
 
 %description
 FRRouting is free software that manages TCP/IP based routing protocols. It takes
@@ -281,6 +285,12 @@ make check PYTHON=%{__python3}
 %endif
 
 %changelog
+* Thu May 21 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-3
+- Resolves: RHEL-174696 - denial of service via crafted BGP UPDATE message
+
+* Thu May 21 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-2
+- Resolves: RHEL-174678 - denial of service via crafted FlowSpec component
+
 * Thu Apr 09 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-1
 - Resolves: RHEL-157859 - Bump FRR to 10.4.3 to fix EVPN problems
 
