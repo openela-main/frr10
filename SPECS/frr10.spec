@@ -8,7 +8,7 @@
 
 Name: frr10
 Version: 10.4.3
-Release: 3%{?checkout}%{?dist}
+Release: 3%{?checkout}%{?dist}.2
 Summary: Routing daemon
 License: GPLv2+
 URL: http://www.frrouting.org
@@ -77,6 +77,9 @@ Patch0014: 0014-isisd-fuzz-test.patch
 Patch0015: 0015-fix-CVE-2026-37457.patch
 # https://github.com/FRRouting/frr/commit/693a2e02
 Patch0016: 0016-fix-CVE-2026-37459.patch
+# https://github.com/FRRouting/frr/commit/7676cad65114aa23adde58
+Patch0017: 0017-fix-CVE-2026-37460.patch
+Patch0018: 0018-set-pythonnouser-env-var.patch
 
 %description
 FRRouting is free software that manages TCP/IP based routing protocols. It takes
@@ -285,6 +288,13 @@ make check PYTHON=%{__python3}
 %endif
 
 %changelog
+* Fri Jul 31 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-3.2
+- Resolves: RHEL-222338 - AVC when reading user's site-packages
+
+* Fri Jul 10 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 10.4.3-3.1
+- Fix CVE-2026-37460: improve packet parsing for EVPN and ENCAP/VNC
+- Resolves: RHEL-193232
+
 * Thu May 21 2026 Michal Ruprich <mruprich@redhat.com> - 10.4.3-3
 - Resolves: RHEL-174696 - denial of service via crafted BGP UPDATE message
 

@@ -1,0 +1,12 @@
+diff --git a/tools/frr.service.in b/tools/frr.service.in
+index 214eea3..2304d47 100644
+--- a/tools/frr.service.in
++++ b/tools/frr.service.in
+@@ -21,6 +21,7 @@ PIDFile=@e_frr_runstatedir@/watchfrr.pid
+ ExecStart=@e_sbindir@/frrinit.sh start
+ ExecStop=@e_sbindir@/frrinit.sh stop
+ ExecReload=@e_sbindir@/frrinit.sh reload
++Environment=PYTHONNOUSERSITE=1
+ 
+ [Install]
+ WantedBy=multi-user.target
