@@ -1,0 +1,259 @@
+From 50ed71b6d7dd1b79a31189d9a408a8e69a59e0ae Mon Sep 17 00:00:00 2001
+From: Donald Sharp <sharpd@nvidia.com>
+Date: Wed, 15 Jul 2026 11:28:03 -0400
+Subject: [PATCH 1/2] zebra: Do not early route remove wrong kernel route
+
+When removing a route from the metaQ in zebra, ensure that it is
+actually the correct table as well.  This sequence of events:
+
+sudo ip route add 192.0.2.99/32 dev dummy0 table 198 ; sudo ip address add 192.0.2.99/32 dev dummy0
+
+Would cause these events to happen:
+
+a) Enqueue 192.0.2.99/32 kernel route on table 198 into metaQ
+b) Enqueue 192.0.2.99/32 local route for default table, removing (a)
+
+This was happening because the code to inspect the metaQ for pre-existing
+kernel routes was not looking at the table id and everything else was the
+same between the connected and the kernel route.  We just need to add
+a table discriminator to the situation.
+
+Fixes: #22654
+Signed-off-by: Donald Sharp <sharpd@nvidia.com>
+---
+ zebra/connected.c | 3 ++-
+ zebra/rib.h       | 2 +-
+ zebra/zebra_rib.c | 9 +++++----
+ 3 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/zebra/connected.c b/zebra/connected.c
+index d30a07fb84b9..909ecc6105ed 100644
+--- a/zebra/connected.c
++++ b/zebra/connected.c
+@@ -195,7 +195,8 @@ static void connected_remove_kernel_for_connected(afi_t afi, safi_t safi, struct
+ 	/*
+ 	 * Needs to be early as that the actual route_node may not exist yet
+ 	 */
+-	rib_meta_queue_early_route_cleanup(p, afi, safi, zvrf->vrf->vrf_id, ZEBRA_ROUTE_KERNEL);
++	rib_meta_queue_early_route_cleanup(p, afi, safi, zvrf->vrf->vrf_id, zvrf->table_id,
++					   ZEBRA_ROUTE_KERNEL);
+ 
+ 	if (!table)
+ 		return;
+diff --git a/zebra/rib.h b/zebra/rib.h
+index 286690953dbd..8c62145e96b8 100644
+--- a/zebra/rib.h
++++ b/zebra/rib.h
+@@ -474,7 +474,7 @@ int zebra_rib_queue_evpn_rem_vtep_del(vrf_id_t vrf_id, vni_t vni, struct ipaddr
+ extern void meta_queue_free(struct meta_queue *mq, struct zebra_vrf *zvrf);
+ extern int zebra_rib_labeled_unicast(struct route_entry *re);
+ extern void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_t safi,
+-					       vrf_id_t vrf_id, int route_type);
++					       vrf_id_t vrf_id, uint32_t table, int route_type);
+ extern struct route_table *rib_table_ipv6;
+ 
+ extern uint32_t zebra_rib_meta_queue_size(void);
+diff --git a/zebra/zebra_rib.c b/zebra/zebra_rib.c
+index 8db4064f7af4..e9fac263f961 100644
+--- a/zebra/zebra_rib.c
++++ b/zebra/zebra_rib.c
+@@ -4341,7 +4341,7 @@ static int rib_meta_queue_early_route_add(struct meta_queue *mq, void *data)
+ }
+ 
+ void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_t safi,
+-					vrf_id_t vrf_id, int route_type)
++					vrf_id_t vrf_id, uint32_t table, int route_type)
+ {
+ 	struct listnode *node, *nnode;
+ 	struct zebra_early_route *ere;
+@@ -4350,7 +4350,7 @@ void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_
+ 	for (ALL_LIST_ELEMENTS(zrouter.mq->subq[META_QUEUE_EARLY_ROUTE], node, nnode, ere)) {
+ 		/* Check if this entry matches the prefix and route type */
+ 		if (prefix_same(&ere->p, p) && ere->re->type == route_type && ere->afi == afi &&
+-		    ere->safi == safi && ere->re->vrf_id == vrf_id) {
++		    ere->safi == safi && ere->re->vrf_id == vrf_id && ere->re->table == table) {
+ 			/* Remove from the list */
+ 			list_delete_node(zrouter.mq->subq[META_QUEUE_EARLY_ROUTE], node);
+ 
+@@ -4364,9 +4364,10 @@ void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_
+ 			if (IS_ZEBRA_DEBUG_RIB_DETAILED) {
+ 				struct vrf *vrf = vrf_lookup_by_id(ere->re->vrf_id);
+ 
+-				zlog_debug("Route %pFX(%s:%s) type %s(%d) removed from early route queue",
++				zlog_debug("Route %pFX(%s:%s) type %s(%d) table %u removed from early route queue",
+ 					   p, VRF_LOGNAME(vrf), safi2str(ere->safi),
+-					   zebra_route_string(route_type), route_type);
++					   zebra_route_string(route_type), route_type,
++					   ere->re->table);
+ 			}
+ 		}
+ 	}
+
+From c9b8729f1b5144467a8ca1daecdf4b21d5079544 Mon Sep 17 00:00:00 2001
+From: Donald Sharp <sharpd@nvidia.com>
+Date: Wed, 15 Jul 2026 11:48:36 -0400
+Subject: [PATCH 2/2] tests: Add test to show that the kernel route is not
+ removed
+
+Previous commit fixed an issue where a kernel route was being
+removed when it should not have been.  Show that this works
+properly still.
+
+Signed-off-by: Donald Sharp <sharpd@nvidia.com>
+---
+ .../r1/ip_route_table198_kernel.json          |  24 ++++
+ .../test_zebra_multiple_connected.py          | 104 ++++++++++++++++++
+ 2 files changed, 128 insertions(+)
+ create mode 100644 tests/topotests/zebra_multiple_connected/r1/ip_route_table198_kernel.json
+
+diff --git a/tests/topotests/zebra_multiple_connected/r1/ip_route_table198_kernel.json b/tests/topotests/zebra_multiple_connected/r1/ip_route_table198_kernel.json
+new file mode 100644
+index 000000000000..d83caba93ec1
+--- /dev/null
++++ b/tests/topotests/zebra_multiple_connected/r1/ip_route_table198_kernel.json
+@@ -0,0 +1,24 @@
++{
++  "192.0.2.99/32":[
++    {
++      "prefix":"192.0.2.99/32",
++      "prefixLen":32,
++      "protocol":"kernel",
++      "vrfName":"default",
++      "selected":true,
++      "destSelected":true,
++      "distance":0,
++      "metric":0,
++      "installed":true,
++      "table":198,
++      "nexthops":[
++        {
++          "fib":true,
++          "directlyConnected":true,
++          "interfaceName":"dummy0",
++          "active":true
++        }
++      ]
++    }
++  ]
++}
+diff --git a/tests/topotests/zebra_multiple_connected/test_zebra_multiple_connected.py b/tests/topotests/zebra_multiple_connected/test_zebra_multiple_connected.py
+index bb9bbda..17057e6 100644
+--- a/tests/topotests/zebra_multiple_connected/test_zebra_multiple_connected.py
++++ b/tests/topotests/zebra_multiple_connected/test_zebra_multiple_connected.py
+@@ -19,6 +19,7 @@ import sys
+ import pytest
+ import json
+ from functools import partial
++from lib.common_config import step
+ from lib.topolog import logger
+ 
+ pytestmark = pytest.mark.random_order(disabled=True)
+@@ -337,6 +338,108 @@ def test_zebra_mtu_single_local_route_per_address():
+     )
+     assert result is None, "Local route check failed: {}".format(result)
+ 
++def _get_early_route_metaq_current(router):
++    """Return Early Route Processing count from 'show zebra metaq json'."""
++    try:
++        output = router.vtysh_cmd("show zebra metaq json")
++        metaq = json.loads(output)
++        for subqueue in metaq["subqueues"]:
++            if subqueue["SubQ"] == "Early Route Processing":
++                return subqueue["Current"]
++    except (KeyError, json.JSONDecodeError, TypeError) as err: 
++        logger.info("Failed to parse metaq json: %s", err)
++    return None
++
++
++def test_zebra_metaq_early_route_table_discriminator():
++    "Local route must not remove a same-prefix kernel route in another table"
++
++    tgen = get_topogen()
++    if tgen.routers_have_failure():
++        pytest.skip(tgen.errors)
++
++    router = tgen.gears["r1"]
++    ifname = "dummy0"
++    prefix = "192.0.2.99/32"
++    table_id = 198
++
++    step("Create dummy0")
++    router.run(f"ip link del dev {ifname} >/dev/null 2>&1 || true")
++    router.run(f"ip link add {ifname} type dummy")
++    router.run(f"ip link set {ifname} up")
++
++    step("Plug the meta queue so early routes remain visible")
++    router.vtysh_cmd("zebra test metaq disable")
++
++    step("Add the table-198 kernel route")
++    router.run(f"ip route add {prefix} dev {ifname} table {table_id}")
++
++    step("Wait for the kernel route to land on the early-route metaQ")
++
++    def _kernel_on_early_metaq():
++        count = _get_early_route_metaq_current(router)
++        if count != 1:
++            return "expected 1 early-route entry after kernel add, got {}".format(count)
++        return None
++
++    _, result = topotest.run_and_expect(_kernel_on_early_metaq, None, count=20, wait=1)
++    assert result is None, result
++
++    step("Immediately add the same /32 as a local address on dummy0")
++    router.run(f"ip address add {prefix} dev {ifname}")
++
++    step("Verify the table-198 kernel route stayed on the early-route metaQ")
++
++    def _kernel_still_on_early_metaq():
++        count = _get_early_route_metaq_current(router)
++        # kernel(table 198) + connected(unicast+multicast) + local(unicast+multicast)
++        if count != 5:
++            return (
++                "expected 5 early-route entries after local add "
++                "(kernel + connected + local, each in unicast and multicast), got {}".format(
++                    count
++                )
++            )
++        return None
++
++    _, result = topotest.run_and_expect(
++        _kernel_still_on_early_metaq, None, count=20, wait=1
++    )
++    assert (
++        result is None
++    ), "connected_up removed the wrong kernel route from early-route metaQ: {}".format(
++        result
++    )
++
++    step("Unplug the meta queue and verify both routes install")
++    router.vtysh_cmd("no zebra test metaq disable")
++
++    kernel = "{}/r1/ip_route_table198_kernel.json".format(CWD)
++    expected = json.loads(open(kernel).read())
++    test_func = partial(
++        topotest.router_json_cmp,
++        router,
++        "show ip route table {} {} json".format(table_id, prefix),
++        expected,
++    )
++    _, result = topotest.run_and_expect(test_func, None, count=20, wait=1)
++    assert (
++        result is None
++    ), "Kernel route missing from table {} after metaQ drain".format(table_id)
++
++    def _check_local_installed():
++        local_output = json.loads(
++            router.vtysh_cmd("show ip route {} json".format(prefix))
++        )
++        if prefix not in local_output:
++            return "local route {} missing from main table".format(prefix)
++        if not any(e.get("protocol") == "local" for e in local_output[prefix]):
++            return "expected local route for {} in main table".format(prefix)
++        return None
++
++    _, result = topotest.run_and_expect(_check_local_installed, None, count=20, wait=1)
++    assert result is None, result
++
+ 
+ if __name__ == "__main__":
+     args = ["-s"] + sys.argv[1:]

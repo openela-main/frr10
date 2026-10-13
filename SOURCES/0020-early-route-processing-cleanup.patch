@@ -1,0 +1,102 @@
+From 4b17e7f644731a896fc068cd41b48dbca7d446b1 Mon Sep 17 00:00:00 2001
+From: Donald Sharp <sharpd@nvidia.com>
+Date: Fri, 30 Jan 2026 14:47:51 -0500
+Subject: [PATCH] zebra: Fix early route processing cleanup when kernel routes
+ are cleaned up
+
+Currently when FRR receives a kernel route notification it cleans the route
+up from the early route meta Queue.  This is presenting some problems when
+the same route happens to be in the early route metaQueue multiple times
+for different vrf's and safi's.  Tighten up the search to only look
+for the afi/safi and vrf id for the route in question to not cause
+it to remove the wrong route.
+
+This problem was exposed by the zebra_rib/test_zebra_rib.py topotest
+under very very heavy system load locally for me.
+
+I have also added some additional modifications to the debugs under
+`debug zebra rib detail` that allow to see more data about the safi
+and the actual route type being looked at.
+
+Signed-off-by: Donald Sharp <sharpd@nvidia.com>
+---
+ zebra/connected.c |  2 +-
+ zebra/rib.h       |  3 ++-
+ zebra/zebra_rib.c | 18 +++++++++++-------
+ 3 files changed, 14 insertions(+), 9 deletions(-)
+
+diff --git a/zebra/connected.c b/zebra/connected.c
+index 3964797b7168..1d81ca412d81 100644
+--- a/zebra/connected.c
++++ b/zebra/connected.c
+@@ -195,7 +195,7 @@ static void connected_remove_kernel_for_connected(afi_t afi, safi_t safi, struct
+ 	/*
+ 	 * Needs to be early as that the actual route_node may not exist yet
+ 	 */
+-	rib_meta_queue_early_route_cleanup(p, ZEBRA_ROUTE_KERNEL);
++	rib_meta_queue_early_route_cleanup(p, afi, safi, zvrf->vrf->vrf_id, ZEBRA_ROUTE_KERNEL);
+ 
+ 	if (!table)
+ 		return;
+diff --git a/zebra/rib.h b/zebra/rib.h
+index 291215125f6e..19d50487a7ea 100644
+--- a/zebra/rib.h
++++ b/zebra/rib.h
+@@ -466,7 +466,8 @@ int zebra_rib_queue_evpn_rem_vtep_del(vrf_id_t vrf_id, vni_t vni, struct ipaddr
+ 
+ extern void meta_queue_free(struct meta_queue *mq, struct zebra_vrf *zvrf);
+ extern int zebra_rib_labeled_unicast(struct route_entry *re);
+-extern void rib_meta_queue_early_route_cleanup(const struct prefix *p, int route_type);
++extern void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_t safi,
++					       vrf_id_t vrf_id, int route_type);
+ extern struct route_table *rib_table_ipv6;
+ 
+ extern uint32_t zebra_rib_meta_queue_size(void);
+diff --git a/zebra/zebra_rib.c b/zebra/zebra_rib.c
+index dff5c3cb35ac..d26b10870e76 100644
+--- a/zebra/zebra_rib.c
++++ b/zebra/zebra_rib.c
+@@ -4150,15 +4150,17 @@ static int rib_meta_queue_early_route_add(struct meta_queue *mq, void *data)
+ 	if (IS_ZEBRA_DEBUG_RIB_DETAILED) {
+ 		struct vrf *vrf = vrf_lookup_by_id(ere->re->vrf_id);
+ 
+-		zlog_debug("Route %pFX(%s) (%s) queued for processing into sub-queue %s mq size %u",
+-			   &ere->p, VRF_LOGNAME(vrf), ere->deletion ? "delete" : "add",
+-			   subqueue2str(META_QUEUE_EARLY_ROUTE), zrouter.mq->size);
++		zlog_debug("Route %pFX(%s:%s) (%s) queued for processing into sub-queue %s mq size %u",
++			   &ere->p, VRF_LOGNAME(vrf), safi2str(ere->safi),
++			   ere->deletion ? "delete" : "add", subqueue2str(META_QUEUE_EARLY_ROUTE),
++			   zrouter.mq->size);
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-void rib_meta_queue_early_route_cleanup(const struct prefix *p, int route_type)
++void rib_meta_queue_early_route_cleanup(const struct prefix *p, afi_t afi, safi_t safi,
++					vrf_id_t vrf_id, int route_type)
+ {
+ 	struct listnode *node, *nnode;
+ 	struct zebra_early_route *ere;
+@@ -4166,7 +4168,8 @@ void rib_meta_queue_early_route_cleanup(const struct prefix *p, int route_type)
+ 	/* Iterate through the early route subqueue */
+ 	for (ALL_LIST_ELEMENTS(zrouter.mq->subq[META_QUEUE_EARLY_ROUTE], node, nnode, ere)) {
+ 		/* Check if this entry matches the prefix and route type */
+-		if (prefix_same(&ere->p, p) && ere->re->type == route_type) {
++		if (prefix_same(&ere->p, p) && ere->re->type == route_type && ere->afi == afi &&
++		    ere->safi == safi && ere->re->vrf_id == vrf_id) {
+ 			/* Remove from the list */
+ 			list_delete_node(zrouter.mq->subq[META_QUEUE_EARLY_ROUTE], node);
+ 
+@@ -4180,8 +4183,9 @@ void rib_meta_queue_early_route_cleanup(const struct prefix *p, int route_type)
+ 			if (IS_ZEBRA_DEBUG_RIB_DETAILED) {
+ 				struct vrf *vrf = vrf_lookup_by_id(ere->re->vrf_id);
+ 
+-				zlog_debug("Route %pFX(%s) type %d removed from early route queue",
+-					   p, VRF_LOGNAME(vrf), route_type);
++				zlog_debug("Route %pFX(%s:%s) type %s(%d) removed from early route queue",
++					   p, VRF_LOGNAME(vrf), safi2str(ere->safi),
++					   zebra_route_string(route_type), route_type);
+ 			}
+ 		}
+ 	}
